@@ -4,6 +4,10 @@ __pycache__/
 checkpoints/
 *.pth
 *.jpg
-venv/
+.venv/
 .idea/
 wandb/
+.keep
+*.png
+*.tiff
+

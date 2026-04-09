@@ -5,7 +5,7 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image,ImageOps
 from torchvision import transforms
 
 from utils.data_loading import BasicDataset
@@ -37,11 +37,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='Predict masks from input images')
     parser.add_argument('--model', '-m', default='MODEL.pth', metavar='FILE',
                         help='Specify the file in which the model is stored')
-    parser.add_argument('--input', '-i', metavar='INPUT', nargs='+', help='Filenames of input images', required=True)
-    parser.add_argument('--output', '-o', metavar='OUTPUT', nargs='+', help='Filenames of output images')
-    parser.add_argument('--viz', '-v', action='store_true',
-                        help='Visualize the images as they are processed')
-    parser.add_argument('--no-save', '-n', action='store_true', help='Do not save the output masks')
+    parser.add_argument('--inputFolder', '-i', default="./", metavar='INPUT', nargs='+', help='Folder of input images')
     parser.add_argument('--mask-threshold', '-t', type=float, default=0.5,
                         help='Minimum probability value to consider a mask pixel white')
     parser.add_argument('--scale', '-s', type=float, default=1,
@@ -52,11 +48,6 @@ def get_args():
     return parser.parse_args()
 
 
-def get_output_filenames(args):
-    def _generate_name(fn):
-        return f'{os.path.splitext(fn)[0]}_OUT.png'
-
-    return args.output or list(map(_generate_name, args.input))
 
 
 def mask_to_image(mask: np.ndarray, mask_values):
@@ -80,15 +71,11 @@ if __name__ == '__main__':
     args = get_args()
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-    in_files = args.input
-    out_files = get_output_filenames(args)
-
     net = UNet(n_channels=1, n_classes=args.classes, bilinear=args.bilinear)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Loading model {args.model}')
     logging.info(f'Using device {device}')
-
     net.to(device=device)
     state_dict = torch.load(args.model, map_location=device)
     mask_values = state_dict.pop('mask_values', [0, 1])
@@ -96,22 +83,37 @@ if __name__ == '__main__':
 
     logging.info('Model loaded!')
 
-    for i, filename in enumerate(in_files):
-        logging.info(f'Predicting image {filename} ...')
-        img = Image.open(filename)
-        mask = predict_img(net=net,
-                           full_img=img,
-                           scale_factor=args.scale,
-                           out_threshold=args.mask_threshold,
-                           device=device)
 
-        if not args.no_save:
-            out_filename = out_files[i]
-            result = mask_to_image(mask, mask_values)
+    folder = args.inputFolder[0]
+
+    targetFolder="OCT_images"
+    for root, dirs, files in os.walk(folder):
+        if not targetFolder in dirs:
+            continue
+        subfolder=os.path.join(root,targetFolder)
+        folder_new=subfolder+'_mask_predict'
+        folder_new2=subfolder+'_mask_predict_overlay'
+        os.makedirs(folder_new, exist_ok=True)
+        os.makedirs(folder_new2, exist_ok=True)
+        for i, in_file in enumerate(os.listdir(subfolder)):
+            if not in_file.endswith('.jpg'):
+                continue
+            img = Image.open(os.path.join(subfolder,in_file))
+            mask = predict_img(net=net,
+                            full_img=img,
+                            scale_factor=args.scale,
+                            out_threshold=args.mask_threshold,
+                            device=device)
+            result = mask_to_image(mask, mask_values).convert('L')
+            print(result.mode)
+
+            black_channel = Image.new('L', result.size, 0)
+            result_colorful = Image.merge("RGB", ( ImageOps.invert(result), black_channel,result))
+            result_blend=Image.blend(result_colorful, img.convert('RGB'), 1.0 / 2)
+            out_filename=os.path.join(folder_new,in_file)
+            out_filename2=os.path.join(folder_new2,in_file)
             result.save(out_filename)
-            logging.info(f'Mask saved to {out_filename}')
+            result_blend.save(out_filename2)
+            logging.info(f'{i} Mask saved to {out_filename}')
 
-        if args.viz:
-            print('showing imgs')
-            logging.info(f'Visualizing results for image {filename}, close to continue...')
-            plot_img_and_mask(img, mask)
+
